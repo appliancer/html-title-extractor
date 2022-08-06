@@ -11,8 +11,16 @@ const (
 	port = 9000
 )
 
+var urls = []string{
+	"https://www.result.si/projekti/",
+	"https://www.result.si/o-nas/",
+	"https://www.result.si/kariera/",
+	"https://www.result.si/blog/",
+}
+
 func main() {
-	http.Handle("/extract-titles", extractor.Handler{})
+	handler := extractor.NewHandler(http.DefaultClient, urls)
+	http.Handle("/extract-titles", handler)
 
 	server := http.Server{
 		Addr: ":" + strconv.Itoa(port),
