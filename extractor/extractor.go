@@ -12,6 +12,20 @@ import (
 
 var titleRegexp = regexp.MustCompilePOSIX("<title>((\n|.)*?)</title>")
 
+func extractTitle(httpGetter HttpGetter, url string) (string, error) {
+	body, err := download(httpGetter, url)
+	if err != nil {
+		return "", fmt.Errorf("failed to download from url %s: %w", url, err)
+	}
+
+	title, err := extractTitleFromHtml(body)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract title from html: %w", err)
+	}
+
+	return title, nil
+}
+
 func download(httpGetter HttpGetter, url string) (body []byte, err error) {
 	response, err := httpGetter.Get(url)
 	if err != nil {

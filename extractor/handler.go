@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -43,7 +45,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 	nConcurrent = clampInt(nConcurrent, concurrentMin, concurrentMax)
 
-	response, err := handler.run()
+	response, err := handler.run(nConcurrent)
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
 		log.Println("failed to extract titles:", err)
@@ -56,21 +58,41 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 }
 
-func (handler *Handler) run() ([]byte, error) {
-	titles := make([]string, 0, len(handler.urls))
+func (handler *Handler) run(nConcurrent int) ([]byte, error) {
+	type urlWithIndex struct {
+		url   string
+		index int
+	}
 
-	for _, url := range handler.urls {
-		body, err := download(handler.httpGetter, url)
-		if err != nil {
-			return nil, fmt.Errorf("failed to download from url %s: %w", url, err)
-		}
+	urlChan := make(chan urlWithIndex)
+	titles := make([]string, len(handler.urls))
+	var lastError atomic.Pointer[error]
 
-		title, err := extractTitleFromHtml(body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract title from html: %w", err)
-		}
+	var wg sync.WaitGroup
+	wg.Add(nConcurrent)
 
-		titles = append(titles, title)
+	for i := 0; i < nConcurrent; i++ {
+		go func() {
+			for url := range urlChan {
+				title, err := extractTitle(handler.httpGetter, url.url)
+				if err != nil {
+					lastError.Store(&err)
+				}
+				titles[url.index] = title
+			}
+			wg.Done()
+		}()
+	}
+
+	for i, url := range handler.urls {
+		urlChan <- urlWithIndex{url: url, index: i}
+	}
+	close(urlChan)
+
+	wg.Wait()
+
+	if err := lastError.Load(); err != nil {
+		return nil, fmt.Errorf("error in extractor goroutine: %w", *err)
 	}
 
 	titlesJson, err := json.Marshal(titles)
