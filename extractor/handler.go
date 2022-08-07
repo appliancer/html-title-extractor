@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -58,49 +58,72 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 }
 
+type result struct {
+	title string
+	err   error
+}
+
 func (handler *Handler) run(nConcurrent int) ([]byte, error) {
-	type urlWithIndex struct {
-		url   string
-		index int
+	responseObj := struct {
+		Titles     []string `json:"titles"`
+		Successful int      `json:"successful"`
+		Failed     int      `json:"failed"`
+	}{}
+
+	urls := genChan(handler.urls...)
+	for result := range extractTitles(handler.httpGetter, urls, nConcurrent) {
+		if result.err != nil {
+			log.Println("failed to extract title:", result.err)
+			responseObj.Failed++
+		} else {
+			responseObj.Titles = append(responseObj.Titles, result.title)
+			responseObj.Successful++
+		}
 	}
 
-	urlChan := make(chan urlWithIndex)
-	titles := make([]string, len(handler.urls))
-	var lastError atomic.Pointer[error]
+	sort.Strings(responseObj.Titles) // ensure deterministic response
+
+	response, err := json.Marshal(responseObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal json: %w", err)
+	}
+
+	return response, nil
+}
+
+func extractTitles(httpGetter HttpGetter, urls <-chan string, nConcurrent int) <-chan result {
+	results := make(chan result)
 
 	var wg sync.WaitGroup
 	wg.Add(nConcurrent)
 
 	for i := 0; i < nConcurrent; i++ {
 		go func() {
-			for url := range urlChan {
-				title, err := extractTitle(handler.httpGetter, url.url)
-				if err != nil {
-					lastError.Store(&err)
-				}
-				titles[url.index] = title
+			for url := range urls {
+				title, err := extractTitle(httpGetter, url)
+				results <- result{title: title, err: err}
 			}
 			wg.Done()
 		}()
 	}
 
-	for i, url := range handler.urls {
-		urlChan <- urlWithIndex{url: url, index: i}
-	}
-	close(urlChan)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
-	wg.Wait()
+	return results
+}
 
-	if err := lastError.Load(); err != nil {
-		return nil, fmt.Errorf("error in extractor goroutine: %w", *err)
-	}
-
-	titlesJson, err := json.Marshal(titles)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal json: %w", err)
-	}
-
-	return titlesJson, nil
+func genChan[T any](items ...T) chan T {
+	c := make(chan T)
+	go func() {
+		for _, item := range items {
+			c <- item
+		}
+		close(c)
+	}()
+	return c
 }
 
 func clampInt(val, min, max int) int {

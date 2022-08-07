@@ -47,7 +47,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 			method:             http.MethodGet,
 			query:              "n_concurrent=2",
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       []byte(`["test\n1","test 2"]`),
+			expectedBody:       []byte(`{"titles":["test\n1","test 2"],"successful":2,"failed":0}`),
 		},
 		{
 			urls:               []string{"http://example.com/test1", "http://example.com/test2"},
@@ -66,7 +66,15 @@ func TestHandler_ServeHTTP(t *testing.T) {
 			urls:               []string{"invalid"},
 			method:             http.MethodGet,
 			query:              "n_concurrent=2",
-			expectedStatusCode: http.StatusInternalServerError,
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       []byte(`{"titles":null,"successful":0,"failed":1}`),
+		},
+		{
+			urls:               []string{"http://example.com/test2", "invalid"},
+			method:             http.MethodGet,
+			query:              "n_concurrent=2",
+			expectedStatusCode: http.StatusOK,
+			expectedBody:       []byte(`{"titles":["test 2"],"successful":1,"failed":1}`),
 		},
 	}
 
